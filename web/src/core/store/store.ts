@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
-import { chatStream, generatePodcast } from "../api";
+import { chatStream, generatePodcast, getChatHistory, getChatSession, deleteChatSession, type ChatSession } from "../api";
 import type { Message, Resource } from "../messages";
 import { mergeMessage } from "../messages";
 import { parseJSON } from "../utils";
@@ -14,6 +14,26 @@ import { parseJSON } from "../utils";
 import { getChatStreamSettings } from "./settings-store";
 
 const THREAD_ID = nanoid();
+const HISTORY_STORAGE_KEY = "deerflow_chat_history";
+
+// Load chat history from localStorage
+function loadChatHistory(): ChatSession[] {
+  try {
+    const stored = localStorage.getItem(HISTORY_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Save chat history to localStorage
+function saveChatHistory(sessions: ChatSession[]) {
+  try {
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(sessions));
+  } catch (error) {
+    console.error("Failed to save chat history:", error);
+  }
+}
 
 export const useStore = create<{
   responding: boolean;
@@ -26,6 +46,9 @@ export const useStore = create<{
   researchActivityIds: Map<string, string[]>;
   ongoingResearchId: string | null;
   openResearchId: string | null;
+  chatHistory: ChatSession[];
+  currentSessionId: string | null;
+  historyPanelOpen: boolean;
 
   appendMessage: (message: Message) => void;
   updateMessage: (message: Message) => void;
@@ -33,7 +56,13 @@ export const useStore = create<{
   openResearch: (researchId: string | null) => void;
   closeResearch: () => void;
   setOngoingResearch: (researchId: string | null) => void;
-}>((set) => ({
+  loadChatHistory: () => void;
+  refreshChatHistory: () => Promise<void>;
+  switchToSession: (sessionId: string) => Promise<void>;
+  deleteSession: (sessionId: string) => Promise<void>;
+  createNewSession: () => void;
+  setHistoryPanelOpen: (open: boolean) => void;
+}>((set, get) => ({
   responding: false,
   threadId: THREAD_ID,
   messageIds: [],
@@ -44,6 +73,9 @@ export const useStore = create<{
   researchActivityIds: new Map<string, string[]>(),
   ongoingResearchId: null,
   openResearchId: null,
+  chatHistory: loadChatHistory(),
+  currentSessionId: null,
+  historyPanelOpen: false,
 
   appendMessage(message: Message) {
     set((state) => ({
@@ -72,6 +104,118 @@ export const useStore = create<{
   setOngoingResearch(researchId: string | null) {
     set({ ongoingResearchId: researchId });
   },
+
+  loadChatHistory() {
+    const history = loadChatHistory();
+    set({ chatHistory: history });
+  },
+
+  async refreshChatHistory() {
+    try {
+      const response = await getChatHistory();
+      const sessions = response.sessions || [];
+      set({ chatHistory: sessions });
+      saveChatHistory(sessions);
+    } catch (error) {
+      console.error("Failed to refresh chat history:", error);
+    }
+  },
+
+  async switchToSession(sessionId: string) {
+    try {
+      const sessionData = await getChatSession(sessionId);
+      if (!sessionData) {
+        toast.error("Failed to load session");
+        return;
+      }
+
+      // Clear current messages
+      set({
+        messageIds: [],
+        messages: new Map(),
+        researchIds: [],
+        researchPlanIds: new Map(),
+        researchReportIds: new Map(),
+        researchActivityIds: new Map(),
+        ongoingResearchId: null,
+        openResearchId: null,
+        threadId: sessionId,
+        currentSessionId: sessionId,
+      });
+
+      // Load session messages
+      const messages: Message[] = sessionData.messages.map((msg, index) => ({
+        id: `${sessionId}-${index}`,
+        threadId: sessionId,
+        role: msg.role as "user" | "assistant",
+        content: msg.content,
+        contentChunks: [msg.content],
+        reasoningContent: "",
+        reasoningContentChunks: [],
+        isStreaming: false,
+      }));
+
+      const messageIds = messages.map(m => m.id);
+      const messagesMap = new Map(messages.map(m => [m.id, m]));
+
+      set({
+        messageIds,
+        messages: messagesMap,
+      });
+
+    } catch (error) {
+      console.error("Failed to switch session:", error);
+      toast.error("Failed to load session");
+    }
+  },
+
+  async deleteSession(sessionId: string) {
+    try {
+      const success = await deleteChatSession(sessionId);
+      if (success) {
+        // Remove from local state
+        set((state) => ({
+          chatHistory: state.chatHistory.filter(s => s.id !== sessionId),
+        }));
+        
+        // Update localStorage
+        const newHistory = get().chatHistory;
+        saveChatHistory(newHistory);
+        
+        // If current session was deleted, create new session
+        if (get().currentSessionId === sessionId) {
+          get().createNewSession();
+        }
+        
+        toast.success("Session deleted");
+      } else {
+        toast.error("Failed to delete session");
+      }
+    } catch (error) {
+      console.error("Failed to delete session:", error);
+      toast.error("Failed to delete session");
+    }
+  },
+
+  createNewSession() {
+    const newThreadId = nanoid();
+    set({
+      threadId: newThreadId,
+      currentSessionId: null,
+      messageIds: [],
+      messages: new Map(),
+      researchIds: [],
+      researchPlanIds: new Map(),
+      researchReportIds: new Map(),
+      researchActivityIds: new Map(),
+      ongoingResearchId: null,
+      openResearchId: null,
+    });
+  },
+
+  setHistoryPanelOpen(open: boolean) {
+    set({ historyPanelOpen: open });
+  },
 }));
 
 export async function sendMessage(
@@ -86,9 +230,10 @@ export async function sendMessage(
   options: { abortSignal?: AbortSignal } = {},
 ) {
   if (content != null) {
+    const store = useStore.getState();
     appendMessage({
       id: nanoid(),
-      threadId: THREAD_ID,
+      threadId: store.threadId || THREAD_ID,
       role: "user",
       content: content,
       contentChunks: [content],
@@ -97,10 +242,13 @@ export async function sendMessage(
   }
 
   const settings = getChatStreamSettings();
+  const store = useStore.getState();
+  const currentThreadId = store.threadId || THREAD_ID;
+  
   const stream = chatStream(
     content ?? "[REPLAY]",
     {
-      thread_id: THREAD_ID,
+      thread_id: currentThreadId,
       interrupt_feedback: interruptFeedback,
       resources,
       auto_accepted_plan: settings.autoAcceptedPlan,
@@ -140,7 +288,7 @@ export async function sendMessage(
         };
         appendMessage(message);
       }
-      message ??= getMessage(messageId);
+      message = message || getMessage(messageId);
       if (message) {
         message = mergeMessage(message, event);
         updateMessage(message);

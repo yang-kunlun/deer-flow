@@ -23,6 +23,7 @@ import {
   useSettingsStore,
 } from "~/core/store";
 import { cn } from "~/lib/utils";
+import { ModelSelector } from "~/components/deer-flow/model-selector";
 
 export function InputBox({
   className,
@@ -52,6 +53,10 @@ export function InputBox({
   const backgroundInvestigation = useSettingsStore(
     (state) => state.general.enableBackgroundInvestigation,
   );
+  const selectedModel = useSettingsStore(
+    (state) => state.general.selectedModel,
+  );
+  const setSelectedModel = useSettingsStore((state) => state.setSelectedModel);
   const { config, loading } = useConfig();
   const reportStyle = useSettingsStore((state) => state.general.reportStyle);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -211,6 +216,10 @@ export function InputBox({
       </div>
       <div className="flex items-center px-4 py-2">
         <div className="flex grow gap-2">
+          <ModelSelector
+            selectedModel={selectedModel}
+            onModelChange={setSelectedModel}
+          />
           {config?.models.reasoning?.[0] && (
             <Tooltip
               className="max-w-60"

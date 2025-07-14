@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import os
+from datetime import datetime
 from typing import Annotated, List, cast
 from uuid import uuid4
 
@@ -26,6 +27,10 @@ from src.rag.builder import build_retriever
 from src.rag.retriever import Resource
 from src.server.chat_request import (
     ChatRequest,
+    ChatHistoryRequest,
+    ChatHistoryResponse,
+    ChatSessionResponse,
+    ChatSession,
     EnhancePromptRequest,
     GeneratePodcastRequest,
     GeneratePPTRequest,
@@ -63,12 +68,43 @@ app.add_middleware(
 
 graph = build_graph_with_memory()
 
+# Chat history storage
+chat_sessions = {}  # In-memory storage for demo purposes
+
+
+def generate_session_title(first_message: str) -> str:
+    """Generate a title from the first user message"""
+    # Take first 50 characters and clean it up
+    title = first_message.strip()[:50]
+    if len(first_message) > 50:
+        title += "..."
+    return title
+
 
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
     thread_id = request.thread_id
     if thread_id == "__default__":
         thread_id = str(uuid4())
+    
+    # Update or create session
+    if thread_id not in chat_sessions and request.messages:
+        # Create new session
+        first_user_message = next((msg.content for msg in request.messages if msg.role == "user"), "New Chat")
+        title = generate_session_title(str(first_user_message))
+        
+        chat_sessions[thread_id] = ChatSession(
+            id=thread_id,
+            title=title,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            message_count=len(request.messages)
+        )
+    elif thread_id in chat_sessions:
+        # Update existing session
+        chat_sessions[thread_id].updated_at = datetime.now()
+        chat_sessions[thread_id].message_count += len(request.messages)
+    
     return StreamingResponse(
         _astream_workflow_generator(
             request.model_dump()["messages"],
@@ -86,6 +122,70 @@ async def chat_stream(request: ChatRequest):
         ),
         media_type="text/event-stream",
     )
+
+
+@app.get("/api/chat/history", response_model=ChatHistoryResponse)
+async def get_chat_history():
+    """Get list of all chat sessions"""
+    sessions = list(chat_sessions.values())
+    sessions.sort(key=lambda x: x.updated_at, reverse=True)  # Sort by most recent
+    return ChatHistoryResponse(sessions=sessions)
+
+
+@app.get("/api/chat/history/{session_id}", response_model=ChatSessionResponse)
+async def get_chat_session(session_id: str):
+    """Get messages from a specific chat session"""
+    try:
+        # Get messages from LangGraph memory
+        checkpointer = graph.checkpointer
+        config = {"configurable": {"thread_id": session_id}}
+        
+        # Get the checkpoint
+        checkpoint = checkpointer.get(config)
+        if not checkpoint:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Extract messages from checkpoint
+        messages = checkpoint.get("channel_values", {}).get("messages", [])
+        
+        # Convert to ChatMessage format
+        chat_messages = []
+        for msg in messages:
+            if hasattr(msg, 'content') and hasattr(msg, 'type'):
+                role = "user" if msg.type == "human" else "assistant"
+                chat_messages.append({
+                    "role": role,
+                    "content": str(msg.content)
+                })
+        
+        return ChatSessionResponse(
+            session_id=session_id,
+            messages=chat_messages
+        )
+    except Exception as e:
+        logger.exception(f"Error retrieving session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
+
+
+@app.delete("/api/chat/history/{session_id}")
+async def delete_chat_session(session_id: str):
+    """Delete a chat session"""
+    try:
+        # Remove from in-memory storage
+        if session_id in chat_sessions:
+            del chat_sessions[session_id]
+        
+        # Remove from LangGraph memory
+        checkpointer = graph.checkpointer
+        config = {"configurable": {"thread_id": session_id}}
+        
+        # Clear the checkpoint
+        checkpointer.put(config, None)
+        
+        return {"message": "Session deleted successfully"}
+    except Exception as e:
+        logger.exception(f"Error deleting session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 
 async def _astream_workflow_generator(

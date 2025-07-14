@@ -12,6 +12,67 @@ import { sleep } from "../utils";
 import { resolveServiceURL } from "./resolve-service-url";
 import type { ChatEvent } from "./types";
 
+export interface ChatSession {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface ChatHistoryResponse {
+  sessions: ChatSession[];
+}
+
+export interface ChatSessionResponse {
+  session_id: string;
+  messages: Array<{
+    role: string;
+    content: string;
+  }>;
+}
+
+export async function getChatHistory(): Promise<ChatHistoryResponse> {
+  try {
+    const response = await fetch(resolveServiceURL("chat/history"));
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch chat history:", error);
+    return { sessions: [] };
+  }
+}
+
+export async function getChatSession(sessionId: string): Promise<ChatSessionResponse | null> {
+  try {
+    const response = await fetch(resolveServiceURL(`chat/history/${sessionId}`));
+    if (!response.ok) {
+      if (response.status === 404) {
+        return null;
+      }
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error(`Failed to fetch chat session ${sessionId}:`, error);
+    return null;
+  }
+}
+
+export async function deleteChatSession(sessionId: string): Promise<boolean> {
+  try {
+    const response = await fetch(resolveServiceURL(`chat/history/${sessionId}`), {
+      method: "DELETE",
+    });
+    return response.ok;
+  } catch (error) {
+    console.error(`Failed to delete chat session ${sessionId}:`, error);
+    return false;
+  }
+}
+
 export async function* chatStream(
   userMessage: string,
   params: {

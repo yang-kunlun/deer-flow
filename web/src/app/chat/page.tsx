@@ -4,16 +4,19 @@
 "use client";
 
 import { GithubOutlined } from "@ant-design/icons";
+import { History } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Suspense } from "react";
 
 import { Button } from "~/components/ui/button";
+import { useStore } from "~/core/store";
 
 import { Logo } from "../../components/deer-flow/logo";
 import { ThemeToggle } from "../../components/deer-flow/theme-toggle";
 import { Tooltip } from "../../components/deer-flow/tooltip";
 import { SettingsDialog } from "../settings/dialogs/settings-dialog";
+import { ChatHistoryPanel } from "./components/chat-history-panel";
 
 const Main = dynamic(() => import("./main"), {
   ssr: false,
@@ -25,10 +28,23 @@ const Main = dynamic(() => import("./main"), {
 });
 
 export default function HomePage() {
+  const { setHistoryPanelOpen } = useStore();
+
   return (
     <div className="flex h-screen w-screen justify-center overscroll-none">
-      <header className="fixed top-0 left-0 flex h-12 w-full items-center justify-between px-4">
-        <Logo />
+      <header className="fixed top-0 left-0 flex h-12 w-full items-center justify-between px-4 z-40">
+        <div className="flex items-center gap-2">
+          <Logo />
+          <Tooltip title="Chat History">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setHistoryPanelOpen(true)}
+            >
+              <History />
+            </Button>
+          </Tooltip>
+        </div>
         <div className="flex items-center">
           <Tooltip title="Star DeerFlow on GitHub">
             <Button variant="ghost" size="icon" asChild>
@@ -47,6 +63,7 @@ export default function HomePage() {
         </div>
       </header>
       <Main />
+      <ChatHistoryPanel />
     </div>
   );
 }

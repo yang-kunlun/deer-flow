@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 from typing import List, Optional, Union
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +26,31 @@ class ChatMessage(BaseModel):
         ...,
         description="The content of the message, either a string or a list of content items",
     )
+
+
+class ChatSession(BaseModel):
+    """Chat session model for history tracking"""
+    id: str = Field(..., description="Unique session identifier")
+    title: str = Field(..., description="Session title")
+    created_at: datetime = Field(..., description="Session creation time")
+    updated_at: datetime = Field(..., description="Session last update time")
+    message_count: int = Field(0, description="Number of messages in session")
+
+
+class ChatHistoryRequest(BaseModel):
+    """Request for chat history operations"""
+    session_id: Optional[str] = Field(None, description="Session ID for specific operations")
+
+
+class ChatHistoryResponse(BaseModel):
+    """Response containing chat history"""
+    sessions: List[ChatSession] = Field(..., description="List of chat sessions")
+
+
+class ChatSessionResponse(BaseModel):
+    """Response containing session messages"""
+    session_id: str = Field(..., description="Session ID")
+    messages: List[ChatMessage] = Field(..., description="List of messages in session")
 
 
 class ChatRequest(BaseModel):

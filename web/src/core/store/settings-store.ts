@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS: SettingsState = {
     maxStepNum: 3,
     maxSearchResults: 3,
     reportStyle: "academic",
+    selectedModel: "claude-3.5-sonnet",
   },
   mcp: {
     servers: [],
@@ -31,133 +32,209 @@ export type SettingsState = {
     maxStepNum: number;
     maxSearchResults: number;
     reportStyle: "academic" | "popular_science" | "news" | "social_media";
+    selectedModel: string;
   };
   mcp: {
     servers: MCPServerMetadata[];
   };
 };
 
-export const useSettingsStore = create<SettingsState>(() => ({
-  ...DEFAULT_SETTINGS,
-}));
+function loadSettings(): SettingsState {
+  if (typeof window === "undefined") {
+    return DEFAULT_SETTINGS;
+  }
+  
+  try {
+    const stored = localStorage.getItem(SETTINGS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        general: {
+          ...DEFAULT_SETTINGS.general,
+          ...parsed.general,
+        },
+        mcp: {
+          ...DEFAULT_SETTINGS.mcp,
+          ...parsed.mcp,
+        },
+      };
+    }
+  } catch (error) {
+    console.error("Failed to load settings:", error);
+  }
+  
+  return DEFAULT_SETTINGS;
+}
 
-export const useSettings = (key: keyof SettingsState) => {
-  return useSettingsStore((state) => state[key]);
-};
-
-export const changeSettings = (settings: SettingsState) => {
-  useSettingsStore.setState(settings);
-};
-
-export const loadSettings = () => {
+function saveSettings(settings: SettingsState) {
   if (typeof window === "undefined") {
     return;
   }
-  const json = localStorage.getItem(SETTINGS_KEY);
-  if (json) {
-    const settings = JSON.parse(json);
-    for (const key in DEFAULT_SETTINGS.general) {
-      if (!(key in settings.general)) {
-        settings.general[key as keyof SettingsState["general"]] =
-          DEFAULT_SETTINGS.general[key as keyof SettingsState["general"]];
-      }
-    }
-
-    try {
-      useSettingsStore.setState(settings);
-    } catch (error) {
-      console.error(error);
-    }
+  
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (error) {
+    console.error("Failed to save settings:", error);
   }
-};
+}
 
-export const saveSettings = () => {
-  const latestSettings = useSettingsStore.getState();
-  const json = JSON.stringify(latestSettings);
-  localStorage.setItem(SETTINGS_KEY, json);
-};
+export const useSettingsStore = create<
+  SettingsState & {
+    updateSettings: (updates: Partial<SettingsState>) => void;
+    setSelectedModel: (model: string) => void;
+    setEnableDeepThinking: (enabled: boolean) => void;
+    setEnableBackgroundInvestigation: (enabled: boolean) => void;
+    setAutoAcceptedPlan: (enabled: boolean) => void;
+    setReportStyle: (style: SettingsState["general"]["reportStyle"]) => void;
+    setMaxPlanIterations: (iterations: number) => void;
+    setMaxStepNum: (steps: number) => void;
+    setMaxSearchResults: (results: number) => void;
+    addMCPServer: (server: MCPServerMetadata) => void;
+    removeMCPServer: (serverName: string) => void;
+    updateMCPServer: (serverName: string, updates: Partial<MCPServerMetadata>) => void;
+  }
+>((set, get) => ({
+  ...loadSettings(),
 
-export const getChatStreamSettings = () => {
-  let mcpSettings:
-    | {
-        servers: Record<
-          string,
-          MCPServerMetadata & {
-            enabled_tools: string[];
-            add_to_agents: string[];
-          }
-        >;
-      }
-    | undefined = undefined;
-  const { mcp, general } = useSettingsStore.getState();
-  const mcpServers = mcp.servers.filter((server) => server.enabled);
-  if (mcpServers.length > 0) {
-    mcpSettings = {
-      servers: mcpServers.reduce((acc, cur) => {
-        const { transport, env } = cur;
-        let server: SimpleMCPServerMetadata;
-        if (transport === "stdio") {
-          server = {
-            name: cur.name,
-            transport,
-            env,
-            command: cur.command,
-            args: cur.args,
-          };
-        } else {
-          server = {
-            name: cur.name,
-            transport,
-            env,
-            url: cur.url,
-          };
-        }
-        return {
-          ...acc,
-          [cur.name]: {
-            ...server,
-            enabled_tools: cur.tools.map((tool) => tool.name),
-            add_to_agents: ["researcher"],
-          },
-        };
-      }, {}),
+  updateSettings: (updates) => {
+    const newSettings = { ...get(), ...updates };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  setSelectedModel: (model) => {
+    const newSettings = {
+      ...get(),
+      general: { ...get().general, selectedModel: model },
     };
-  }
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  setEnableDeepThinking: (enabled) => {
+    const newSettings = {
+      ...get(),
+      general: { ...get().general, enableDeepThinking: enabled },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  setEnableBackgroundInvestigation: (enabled) => {
+    const newSettings = {
+      ...get(),
+      general: { ...get().general, enableBackgroundInvestigation: enabled },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  setAutoAcceptedPlan: (enabled) => {
+    const newSettings = {
+      ...get(),
+      general: { ...get().general, autoAcceptedPlan: enabled },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  setReportStyle: (style) => {
+    const newSettings = {
+      ...get(),
+      general: { ...get().general, reportStyle: style },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  setMaxPlanIterations: (iterations) => {
+    const newSettings = {
+      ...get(),
+      general: { ...get().general, maxPlanIterations: iterations },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  setMaxStepNum: (steps) => {
+    const newSettings = {
+      ...get(),
+      general: { ...get().general, maxStepNum: steps },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  setMaxSearchResults: (results) => {
+    const newSettings = {
+      ...get(),
+      general: { ...get().general, maxSearchResults: results },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  addMCPServer: (server) => {
+    const newSettings = {
+      ...get(),
+      mcp: {
+        ...get().mcp,
+        servers: [...get().mcp.servers, server],
+      },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  removeMCPServer: (serverName) => {
+    const newSettings = {
+      ...get(),
+      mcp: {
+        ...get().mcp,
+        servers: get().mcp.servers.filter((s) => s.name !== serverName),
+      },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+
+  updateMCPServer: (serverName, updates) => {
+    const newSettings = {
+      ...get(),
+      mcp: {
+        ...get().mcp,
+        servers: get().mcp.servers.map((s) =>
+          s.name === serverName ? { ...s, ...updates } : s
+        ),
+      },
+    };
+    set(newSettings);
+    saveSettings(newSettings);
+  },
+}));
+
+export function getChatStreamSettings() {
+  const settings = useSettingsStore.getState();
   return {
-    ...general,
-    mcpSettings,
+    autoAcceptedPlan: settings.general.autoAcceptedPlan,
+    enableDeepThinking: settings.general.enableDeepThinking,
+    enableBackgroundInvestigation: settings.general.enableBackgroundInvestigation,
+    maxPlanIterations: settings.general.maxPlanIterations,
+    maxStepNum: settings.general.maxStepNum,
+    maxSearchResults: settings.general.maxSearchResults,
+    reportStyle: settings.general.reportStyle,
+    selectedModel: settings.general.selectedModel,
+    mcpSettings: {
+      servers: settings.mcp.servers.reduce((acc, server) => {
+        acc[server.name!] = {
+          ...server,
+          enabled_tools: server.enabled_tools || [],
+          add_to_agents: server.add_to_agents || [],
+        };
+        return acc;
+      }, {} as Record<string, any>),
+    },
   };
-};
-
-export function setReportStyle(
-  value: "academic" | "popular_science" | "news" | "social_media",
-) {
-  useSettingsStore.setState((state) => ({
-    general: {
-      ...state.general,
-      reportStyle: value,
-    },
-  }));
-  saveSettings();
 }
-
-export function setEnableDeepThinking(value: boolean) {
-  useSettingsStore.setState((state) => ({
-    general: {
-      ...state.general,
-      enableDeepThinking: value,
-    },
-  }));
-  saveSettings();
-}
-
-export function setEnableBackgroundInvestigation(value: boolean) {
-  useSettingsStore.setState((state) => ({
-    general: {
-      ...state.general,
-      enableBackgroundInvestigation: value,
-    },
-  }));
-  saveSettings();
-}
-loadSettings();
