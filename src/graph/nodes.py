@@ -128,8 +128,34 @@ def planner_node(
 
     try:
         curr_plan = json.loads(repair_json_output(full_response))
-    except json.JSONDecodeError:
-        logger.warning("Planner response is not a valid JSON")
+    except json.JSONDecodeError as e:
+        logger.warning(f"Planner response is not a valid JSON: {e}")
+        logger.info(f"Raw response: {full_response}")
+        
+        # Try to extract JSON from markdown code blocks
+        import re
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', full_response, re.DOTALL)
+        if json_match:
+            try:
+                curr_plan = json.loads(repair_json_output(json_match.group(1)))
+                logger.info("Successfully extracted JSON from markdown code block")
+            except json.JSONDecodeError as e2:
+                logger.warning(f"Failed to parse JSON from markdown block: {e2}")
+                curr_plan = None
+        else:
+            curr_plan = None
+            
+        if curr_plan is None:
+            logger.warning("Unable to parse JSON response, treating as insufficient context")
+            # Create a fallback plan structure
+            curr_plan = {
+                "locale": state.get("locale", "zh-CN"),
+                "has_enough_context": False,
+                "thought": "JSON解析失败，需要重新规划",
+                "title": "研究规划",
+                "steps": []
+            }
+            
         if plan_iterations > 0:
             return Command(goto="reporter")
         else:
@@ -324,20 +350,59 @@ async def _execute_agent_step(
 
     logger.info(f"Executing step: {current_step.title}, agent: {agent_name}")
 
-    # Format completed steps information
+    # Format completed steps information with aggressive context length management
     completed_steps_info = ""
     if completed_steps:
         completed_steps_info = "# Existing Research Findings\n\n"
-        for i, step in enumerate(completed_steps):
-            completed_steps_info += f"## Existing Finding {i + 1}: {step.title}\n\n"
-            completed_steps_info += f"<finding>\n{step.execution_res}\n</finding>\n\n"
+        
+        # Much more aggressive context length limit to prevent overflow
+        max_context_length = 20000  # Very conservative limit
+        current_length = 0
+        
+        # Only include the most recent findings to stay within context limit
+        for i, step in enumerate(completed_steps[-2:]):  # Only keep last 2 steps
+            # Truncate individual step content if too long
+            step_result = step.execution_res
+            if len(step_result) > 10000:  # Limit individual step content
+                step_result = step_result[:10000] + "...[truncated]"
+            
+            step_content = f"## Finding {i + 1}: {step.title}\n\n"
+            step_content += f"<finding>\n{step_result}\n</finding>\n\n"
+            
+            # Estimate token count (rough approximation: 1 token ≈ 4 chars)
+            estimated_tokens = len(step_content) // 4
+            
+            if current_length + estimated_tokens > max_context_length:
+                logger.warning(f"Context length limit reached. Truncating previous findings.")
+                completed_steps_info += f"... (Context truncated for length management)\n\n"
+                break
+            
+            completed_steps_info += step_content
+            current_length += estimated_tokens
+        
+        # Add summary if we had more steps
+        if len(completed_steps) > 2:
+            completed_steps_info += f"... (Skipped {len(completed_steps) - 2} earlier findings for context management)\n\n"
 
     # Prepare the input for the agent with completed steps info
+    task_content = f"{completed_steps_info}# Current Task\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}"
+    
+    # Final context length check - truncate if still too long
+    if len(task_content) > 40000:  # Conservative character limit
+        logger.warning(f"Task content too long ({len(task_content)} chars), truncating...")
+        # Keep current task description but truncate findings
+        current_task_part = f"# Current Task\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}"
+        available_space = 40000 - len(current_task_part)
+        
+        if available_space > 1000:
+            truncated_findings = completed_steps_info[:available_space] + "...[truncated for context management]"
+            task_content = f"{truncated_findings}\n\n{current_task_part}"
+        else:
+            task_content = current_task_part
+    
     agent_input = {
         "messages": [
-            HumanMessage(
-                content=f"{completed_steps_info}# Current Task\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}"
-            )
+            HumanMessage(content=task_content)
         ]
     }
 
@@ -387,6 +452,26 @@ async def _execute_agent_step(
         recursion_limit = default_recursion_limit
 
     logger.info(f"Agent input: {agent_input}")
+    
+    # Check total context length before invoking agent
+    total_context = str(agent_input)
+    context_length = len(total_context) // 4  # Rough token estimate
+    logger.info(f"Estimated context length: {context_length} tokens")
+    
+    # More aggressive context management
+    if context_length > 45000:  # Much lower threshold
+        logger.error(f"Context length ({context_length}) is too high. This may cause API failures.")
+        # Emergency truncation
+        if len(agent_input["messages"]) > 0:
+            current_content = agent_input["messages"][0].content
+            if len(current_content) > 30000:  # Emergency truncation
+                logger.warning("Emergency context truncation applied")
+                agent_input["messages"][0] = HumanMessage(
+                    content=f"# Current Task\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}\n\n[Previous context truncated to prevent API failures]"
+                )
+    elif context_length > 30000:
+        logger.warning(f"Context length ({context_length}) is approaching limit.")
+    
     result = await agent.ainvoke(
         input=agent_input, config={"recursion_limit": recursion_limit}
     )
@@ -399,6 +484,12 @@ async def _execute_agent_step(
     current_step.execution_res = response_content
     logger.info(f"Step '{current_step.title}' execution completed by {agent_name}")
 
+    # Limit observations to prevent context overflow
+    updated_observations = observations + [response_content]
+    if len(updated_observations) > 3:  # Keep only the most recent 3 observations
+        updated_observations = updated_observations[-3:]
+        logger.info(f"Truncated observations to {len(updated_observations)} items for context management")
+
     return Command(
         update={
             "messages": [
@@ -407,7 +498,7 @@ async def _execute_agent_step(
                     name=agent_name,
                 )
             ],
-            "observations": observations + [response_content],
+            "observations": updated_observations,
         },
         goto="research_team",
     )

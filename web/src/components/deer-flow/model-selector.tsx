@@ -24,10 +24,10 @@ interface ModelOption {
 
 const DEFAULT_MODELS: ModelOption[] = [
   {
-    id: "claude-3.5-sonnet",
-    name: "Claude 3.5 Sonnet",
+    id: "claude-sonnet-4",
+    name: "Claude Sonnet 4",
     provider: "OpenRouter",
-    description: "Advanced reasoning and analysis",
+    description: "Latest Claude model with enhanced reasoning",
   },
   {
     id: "gpt-4o",
@@ -44,7 +44,7 @@ interface ModelSelectorProps {
 }
 
 export function ModelSelector({ 
-  selectedModel = "claude-3.5-sonnet",
+  selectedModel = "claude-sonnet-4",
   onModelChange,
   className 
 }: ModelSelectorProps) {

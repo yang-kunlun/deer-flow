@@ -16,7 +16,7 @@ const DEFAULT_SETTINGS: SettingsState = {
     maxStepNum: 3,
     maxSearchResults: 3,
     reportStyle: "academic",
-    selectedModel: "claude-3.5-sonnet",
+    selectedModel: "claude-sonnet-4",
   },
   mcp: {
     servers: [],
@@ -206,7 +206,7 @@ export const useSettingsStore = create<
       mcp: {
         ...get().mcp,
         servers: get().mcp.servers.map((s) =>
-          s.name === serverName ? { ...s, ...updates } : s
+          s.name === serverName ? ({ ...s, ...updates } as MCPServerMetadata) : s
         ),
       },
     };
@@ -230,8 +230,8 @@ export function getChatStreamSettings() {
       servers: settings.mcp.servers.reduce((acc, server) => {
         acc[server.name!] = {
           ...server,
-          enabled_tools: server.enabled_tools || [],
-          add_to_agents: server.add_to_agents || [],
+          enabled_tools: (server as any).enabled_tools || [],
+          add_to_agents: (server as any).add_to_agents || [],
         };
         return acc;
       }, {} as Record<string, any>),

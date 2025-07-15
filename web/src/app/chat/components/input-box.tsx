@@ -18,8 +18,6 @@ import { enhancePrompt } from "~/core/api";
 import { useConfig } from "~/core/api/hooks";
 import type { Option, Resource } from "~/core/messages";
 import {
-  setEnableDeepThinking,
-  setEnableBackgroundInvestigation,
   useSettingsStore,
 } from "~/core/store";
 import { cn } from "~/lib/utils";
@@ -57,6 +55,8 @@ export function InputBox({
     (state) => state.general.selectedModel,
   );
   const setSelectedModel = useSettingsStore((state) => state.setSelectedModel);
+  const setEnableDeepThinking = useSettingsStore((state) => state.setEnableDeepThinking);
+  const setEnableBackgroundInvestigation = useSettingsStore((state) => state.setEnableBackgroundInvestigation);
   const { config, loading } = useConfig();
   const reportStyle = useSettingsStore((state) => state.general.reportStyle);
   const containerRef = useRef<HTMLDivElement>(null);

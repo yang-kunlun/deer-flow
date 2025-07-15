@@ -13,8 +13,25 @@ export function parseJSON<T>(json: string | null | undefined, fallback: T) {
       .replace(/^```plaintext\s*/, "")
       .replace(/^```\s*/, "")
       .replace(/\s*```$/, "");
-    return parse(raw) as T;
-  } catch {
+    
+    // First try with native JSON.parse for better error handling
+    try {
+      return JSON.parse(raw) as T;
+    } catch (nativeError) {
+      // Fallback to best-effort parser with better error handling
+      try {
+        return parse(raw) as T;
+      } catch (bestEffortError) {
+        // Log the error for debugging but don't crash the UI
+        console.warn("JSON parsing failed for input:", raw.substring(0, 200) + "...", {
+          nativeError,
+          bestEffortError
+        });
+        return fallback;
+      }
+    }
+  } catch (error) {
+    console.warn("JSON parsing failed:", error);
     return fallback;
   }
 }

@@ -13,7 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "~/components/ui/dialog";
-import { setReportStyle, useSettingsStore } from "~/core/store";
+import { useSettingsStore } from "~/core/store";
 import { cn } from "~/lib/utils";
 
 import { Tooltip } from "./tooltip";
@@ -28,19 +28,19 @@ const REPORT_STYLES = [
   {
     value: "popular_science" as const,
     label: "Popular Science",
-    description: "Engaging and accessible for general audience",
+    description: "Engaging and accessible for general audiences",
     icon: FileText,
   },
   {
     value: "news" as const,
     label: "News",
-    description: "Factual, concise, and impartial journalistic style",
+    description: "Clear, concise, and structured like news articles",
     icon: Newspaper,
   },
   {
     value: "social_media" as const,
     label: "Social Media",
-    description: "Concise, attention-grabbing, and shareable",
+    description: "Informal, engaging, and social media-friendly",
     icon: Users,
   },
 ];
@@ -48,6 +48,7 @@ const REPORT_STYLES = [
 export function ReportStyleDialog() {
   const [open, setOpen] = useState(false);
   const currentStyle = useSettingsStore((state) => state.general.reportStyle);
+  const setReportStyle = useSettingsStore((state) => state.setReportStyle);
 
   const handleStyleChange = (
     style: "academic" | "popular_science" | "news" | "social_media",

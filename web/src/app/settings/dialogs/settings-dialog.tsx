@@ -20,8 +20,6 @@ import { Tabs, TabsContent } from "~/components/ui/tabs";
 import { useReplay } from "~/core/replay";
 import {
   type SettingsState,
-  changeSettings,
-  saveSettings,
   useSettingsStore,
 } from "~/core/store";
 import { cn } from "~/lib/utils";
@@ -32,7 +30,7 @@ export function SettingsDialog() {
   const { isReplay } = useReplay();
   const [activeTabId, setActiveTabId] = useState(SETTINGS_TABS[0]!.id);
   const [open, setOpen] = useState(false);
-  const [settings, setSettings] = useState(useSettingsStore.getState());
+  const settingsStore = useSettingsStore();
   const [changes, setChanges] = useState<Partial<SettingsState>>({});
 
   const handleTabChange = useCallback(
@@ -51,40 +49,32 @@ export function SettingsDialog() {
 
   const handleSave = useCallback(() => {
     if (Object.keys(changes).length > 0) {
-      const newSettings: SettingsState = {
-        ...settings,
-        ...changes,
-      };
-      setSettings(newSettings);
+      settingsStore.updateSettings(changes);
       setChanges({});
-      changeSettings(newSettings);
-      saveSettings();
     }
     setOpen(false);
-  }, [settings, changes]);
-
-  const handleOpen = useCallback(() => {
-    setSettings(useSettingsStore.getState());
-  }, []);
+  }, [changes, settingsStore]);
 
   const handleClose = useCallback(() => {
     setChanges({});
   }, []);
 
   useEffect(() => {
-    if (open) {
-      handleOpen();
-    } else {
+    if (!open) {
       handleClose();
     }
-  }, [open, handleOpen, handleClose]);
+  }, [open, handleClose]);
 
   const mergedSettings = useMemo<SettingsState>(() => {
+    const currentSettings: SettingsState = {
+      general: settingsStore.general,
+      mcp: settingsStore.mcp,
+    };
     return {
-      ...settings,
+      ...currentSettings,
       ...changes,
     };
-  }, [settings, changes]);
+  }, [settingsStore.general, settingsStore.mcp, changes]);
 
   if (isReplay) {
     return null;
