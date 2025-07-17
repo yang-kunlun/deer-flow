@@ -24,6 +24,27 @@ def continue_to_running_research_team(state: State):
         return "planner"
     if all(step.execution_res for step in current_plan.steps):
         return "planner"
+    
+    # 如果启用了步骤协调器，使用智能协调逻辑
+    step_coordination_enabled = state.get("step_coordination_enabled", False)
+    if step_coordination_enabled:
+        try:
+            from src.agents.step_coordinator import get_step_coordinator
+            step_coordinator = get_step_coordinator()
+            next_steps = step_coordinator.get_next_ready_steps(current_plan.steps)
+            
+            if next_steps:
+                next_step = next_steps[0]  # 选择第一个准备好的步骤
+                if next_step.step_type == StepType.RESEARCH:
+                    return "researcher"
+                elif next_step.step_type == StepType.PROCESSING:
+                    return "coder"
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"步骤协调器执行失败: {e}，使用默认调度逻辑")
+    
+    # 默认的顺序执行逻辑
     for step in current_plan.steps:
         if not step.execution_res:
             break

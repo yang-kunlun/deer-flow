@@ -20,6 +20,12 @@ from src.tools import (
     get_retriever_tool,
     python_repl_tool,
 )
+from src.tools.context_manager import get_context_manager, reset_context_manager
+from src.tools.authority_search import authority_search_tool, credibility_checker_tool
+from src.tools.data_validator import data_validator, validate_search_results, filter_high_quality_results
+from src.tools.quality_scoring import quality_scorer, score_search_results, filter_high_quality_results_by_score
+from src.agents.step_coordinator import get_step_coordinator
+from src.agents.collaboration_manager import get_collaboration_manager
 
 from src.config.agents import AGENT_LLM_MAP
 from src.config.configuration import Configuration
@@ -163,10 +169,22 @@ def planner_node(
     if curr_plan.get("has_enough_context"):
         logger.info("Planner response has enough context.")
         new_plan = Plan.model_validate(curr_plan)
+        
+        # 使用步骤协调器优化执行顺序
+        step_coordinator = get_step_coordinator()
+        if new_plan.steps:
+            try:
+                optimized_steps = step_coordinator.optimize_execution_order(new_plan.steps)
+                new_plan.steps = optimized_steps
+                logger.info(f"步骤协调器优化完成，共 {len(optimized_steps)} 个步骤")
+            except Exception as e:
+                logger.warning(f"步骤协调器优化失败: {e}，使用原始步骤顺序")
+        
         return Command(
             update={
                 "messages": [AIMessage(content=full_response, name="planner")],
                 "current_plan": new_plan,
+                "step_coordination_enabled": True,
             },
             goto="reporter",
         )
@@ -236,6 +254,11 @@ def coordinator_node(
 ) -> Command[Literal["planner", "background_investigator", "__end__"]]:
     """Coordinator node that communicate with customers."""
     logger.info("Coordinator talking.")
+    
+    # 重置上下文管理器，为新的研究任务做准备
+    reset_context_manager()
+    logger.info("Context manager reset for new research task")
+    
     configurable = Configuration.from_runnable_config(config)
     messages = apply_prompt_template("coordinator", state)
     response = (
@@ -324,13 +347,37 @@ def reporter_node(state: State, config: RunnableConfig):
 def research_team_node(state: State):
     """Research team node that collaborates on tasks."""
     logger.info("Research team is collaborating on tasks.")
-    pass
+    
+    # 检查是否启用了协作管理
+    collaboration_enabled = state.get("step_coordination_enabled", False)
+    if collaboration_enabled:
+        try:
+            collaboration_manager = get_collaboration_manager()
+            current_plan = state.get("current_plan")
+            
+            if current_plan and current_plan.steps:
+                # 获取协作优化建议
+                collaboration_info = collaboration_manager.get_collaboration_info(current_plan.steps)
+                
+                # 记录协作指标
+                logger.info(f"协作模式: {collaboration_info.get('collaboration_pattern', 'sequential')}")
+                logger.info(f"建议并行度: {collaboration_info.get('recommended_parallel_agents', 1)}")
+                
+                # 更新状态，包含协作信息
+                return {
+                    "collaboration_info": collaboration_info,
+                    "collaboration_enabled": True
+                }
+        except Exception as e:
+            logger.warning(f"协作管理器执行失败: {e}")
+    
+    return {}
 
 
 async def _execute_agent_step(
     state: State, agent, agent_name: str
 ) -> Command[Literal["research_team"]]:
-    """Helper function to execute a step using the specified agent."""
+    """Helper function to execute a step using the specified agent with step-by-step context management."""
     current_plan = state.get("current_plan")
     observations = state.get("observations", [])
 
@@ -350,60 +397,15 @@ async def _execute_agent_step(
 
     logger.info(f"Executing step: {current_step.title}, agent: {agent_name}")
 
-    # Format completed steps information with aggressive context length management
-    completed_steps_info = ""
-    if completed_steps:
-        completed_steps_info = "# Existing Research Findings\n\n"
-        
-        # Much more aggressive context length limit to prevent overflow
-        max_context_length = 20000  # Very conservative limit
-        current_length = 0
-        
-        # Only include the most recent findings to stay within context limit
-        for i, step in enumerate(completed_steps[-2:]):  # Only keep last 2 steps
-            # Truncate individual step content if too long
-            step_result = step.execution_res
-            if len(step_result) > 10000:  # Limit individual step content
-                step_result = step_result[:10000] + "...[truncated]"
-            
-            step_content = f"## Finding {i + 1}: {step.title}\n\n"
-            step_content += f"<finding>\n{step_result}\n</finding>\n\n"
-            
-            # Estimate token count (rough approximation: 1 token ≈ 4 chars)
-            estimated_tokens = len(step_content) // 4
-            
-            if current_length + estimated_tokens > max_context_length:
-                logger.warning(f"Context length limit reached. Truncating previous findings.")
-                completed_steps_info += f"... (Context truncated for length management)\n\n"
-                break
-            
-            completed_steps_info += step_content
-            current_length += estimated_tokens
-        
-        # Add summary if we had more steps
-        if len(completed_steps) > 2:
-            completed_steps_info += f"... (Skipped {len(completed_steps) - 2} earlier findings for context management)\n\n"
-
-    # Prepare the input for the agent with completed steps info
-    task_content = f"{completed_steps_info}# Current Task\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}"
+    # 使用上下文管理器创建步骤上下文
+    context_manager = get_context_manager()
     
-    # Final context length check - truncate if still too long
-    if len(task_content) > 40000:  # Conservative character limit
-        logger.warning(f"Task content too long ({len(task_content)} chars), truncating...")
-        # Keep current task description but truncate findings
-        current_task_part = f"# Current Task\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}"
-        available_space = 40000 - len(current_task_part)
-        
-        if available_space > 1000:
-            truncated_findings = completed_steps_info[:available_space] + "...[truncated for context management]"
-            task_content = f"{truncated_findings}\n\n{current_task_part}"
-        else:
-            task_content = current_task_part
+    # 为当前步骤创建独立的上下文，基于前期步骤摘要
+    step_context = context_manager.create_step_context(current_step, state)
     
+    # 构建agent输入
     agent_input = {
-        "messages": [
-            HumanMessage(content=task_content)
-        ]
+        "messages": step_context["messages"]
     }
 
     # Add citation reminder for researcher agent
@@ -451,27 +453,10 @@ async def _execute_agent_step(
         )
         recursion_limit = default_recursion_limit
 
+    logger.info(f"Step context length: {step_context['context_length']} tokens")
     logger.info(f"Agent input: {agent_input}")
     
-    # Check total context length before invoking agent
-    total_context = str(agent_input)
-    context_length = len(total_context) // 4  # Rough token estimate
-    logger.info(f"Estimated context length: {context_length} tokens")
-    
-    # More aggressive context management
-    if context_length > 45000:  # Much lower threshold
-        logger.error(f"Context length ({context_length}) is too high. This may cause API failures.")
-        # Emergency truncation
-        if len(agent_input["messages"]) > 0:
-            current_content = agent_input["messages"][0].content
-            if len(current_content) > 30000:  # Emergency truncation
-                logger.warning("Emergency context truncation applied")
-                agent_input["messages"][0] = HumanMessage(
-                    content=f"# Current Task\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}\n\n[Previous context truncated to prevent API failures]"
-                )
-    elif context_length > 30000:
-        logger.warning(f"Context length ({context_length}) is approaching limit.")
-    
+    # 执行agent
     result = await agent.ainvoke(
         input=agent_input, config={"recursion_limit": recursion_limit}
     )
@@ -480,11 +465,19 @@ async def _execute_agent_step(
     response_content = result["messages"][-1].content
     logger.debug(f"{agent_name.capitalize()} full response: {response_content}")
 
-    # Update the step with the execution result
+    # 更新步骤执行结果
     current_step.execution_res = response_content
     logger.info(f"Step '{current_step.title}' execution completed by {agent_name}")
 
-    # Limit observations to prevent context overflow
+    # 为完成的步骤创建摘要并添加到上下文管理器
+    step_summary = context_manager.add_step_summary(current_step, response_content)
+    logger.info(f"Step summary created: {step_summary['step_title']}")
+
+    # 获取研究进度
+    progress = context_manager.get_research_progress(current_plan)
+    logger.info(f"Research progress: {progress['completed']}/{progress['total']} ({progress['percentage']}%)")
+
+    # 为了兼容性，继续维护observations，但限制数量
     updated_observations = observations + [response_content]
     if len(updated_observations) > 3:  # Keep only the most recent 3 observations
         updated_observations = updated_observations[-3:]
@@ -499,6 +492,8 @@ async def _execute_agent_step(
                 )
             ],
             "observations": updated_observations,
+            "step_summary": step_summary,
+            "research_progress": progress,
         },
         goto="research_team",
     )
@@ -566,14 +561,25 @@ async def _setup_and_execute_agent_step(
 async def researcher_node(
     state: State, config: RunnableConfig
 ) -> Command[Literal["research_team"]]:
-    """Researcher node that do research"""
+    """Researcher node that do research with authority source priority"""
     logger.info("Researcher node is researching.")
     configurable = Configuration.from_runnable_config(config)
-    tools = [get_web_search_tool(configurable.max_search_results), crawl_tool]
+    
+    # 优先使用权威源搜索工具，然后是常规搜索和爬虫工具，同时集成质量控制工具
+    tools = [
+        authority_search_tool,  # 权威源搜索工具（优先）
+        credibility_checker_tool,  # 可信度检查工具
+        validate_search_results,  # 数据验证工具（新增）
+        score_search_results,  # 质量评分工具（新增）
+        get_web_search_tool(configurable.max_search_results),  # 常规搜索工具（备用）
+        crawl_tool  # 爬虫工具
+    ]
+    
     retriever_tool = get_retriever_tool(state.get("resources", []))
     if retriever_tool:
         tools.insert(0, retriever_tool)
-    logger.info(f"Researcher tools: {tools}")
+    
+    logger.info(f"Researcher tools: {[tool.name if hasattr(tool, 'name') else str(tool) for tool in tools]}")
     return await _setup_and_execute_agent_step(
         state,
         config,

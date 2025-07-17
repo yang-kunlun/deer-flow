@@ -31,9 +31,9 @@ def get_web_search_tool(max_search_results: int):
         return LoggedTavilySearch(
             name="web_search",
             max_results=max_search_results,
-            include_raw_content=True,
-            include_images=True,
-            include_image_descriptions=True,
+            include_raw_content=False,    # 禁用原始内容以减少上下文长度
+            include_images=False,         # 禁用图片以减少上下文长度  
+            include_image_descriptions=False,  # 禁用图片描述以减少上下文长度
         )
     elif SELECTED_SEARCH_ENGINE == SearchEngine.DUCKDUCKGO.value:
         return LoggedDuckDuckGoSearch(
